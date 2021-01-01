@@ -168,6 +168,7 @@ func (ws *WsTask) recvLoop() {
 			fmt.Println(err)
 			return
 		}
+		ws.Verify()
 		if messageType != websocket.BinaryMessage {
 			_ = ws.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 			ws.cancel()
