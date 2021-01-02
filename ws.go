@@ -1,22 +1,23 @@
-package wsSDK
+package ws
 
 import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/golang/protobuf/proto"
-	"github.com/gorilla/websocket"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/golang/protobuf/proto"
+	"github.com/gorilla/websocket"
 )
 
 type sendMsg struct {
 	msg []byte
 }
 
-type MSG struct {
+type recvMsg struct {
 	msg []byte
 }
 
@@ -26,15 +27,15 @@ type Message interface {
 	GetData(pm proto.Message) proto.Message
 }
 
-func (m *MSG) GetCmd() uint16 {
+func (m *recvMsg) GetCmd() uint16 {
 	return binary.LittleEndian.Uint16(m.msg[:2])
 }
 
-func (m *MSG) GetMsg() []byte {
+func (m *recvMsg) GetMsg() []byte {
 	return m.msg[6:]
 }
 
-func (m *MSG) GetData(pm proto.Message) proto.Message {
+func (m *recvMsg) GetData(pm proto.Message) proto.Message {
 	err := proto.Unmarshal(m.msg[6:], pm)
 	if err != nil {
 		return nil
@@ -56,15 +57,21 @@ type WsTask struct {
 	//stopChan  chan bool
 	sendMutex sync.Mutex
 	Conn      *websocket.Conn
-	msgChan   chan sendMsg
-	recvChan  chan *MSG
+	msgChan   chan *sendMsg
+	recvChan  chan *recvMsg
 	ctx       context.Context
 	cancel    context.CancelFunc
 	//Derived   IWebSocketTask
 }
 
-func NewWsTask(w http.ResponseWriter, r *http.Request) (WebSocketTask, error) {
-	conn, err := newServer().Upgrade(w, r, nil)
+func NewWsTask(w http.ResponseWriter, r *http.Request, conf *ServerConfig, ) (WebSocketTask, error) {
+	var svr *websocket.Upgrader
+	if conf == nil {
+		svr = defaultServer()
+	} else {
+		svr = newServer(conf)
+	}
+	conn, err := svr.Upgrade(w, r, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -73,8 +80,8 @@ func NewWsTask(w http.ResponseWriter, r *http.Request) (WebSocketTask, error) {
 		closed:   -1,
 		verified: false,
 		Conn:     conn,
-		msgChan:  make(chan sendMsg, 10),
-		recvChan: make(chan *MSG, 100),
+		msgChan:  make(chan *sendMsg, 10),
+		recvChan: make(chan *recvMsg, 100),
 		ctx:      ctx,
 		cancel:   cancel,
 	}
@@ -111,7 +118,7 @@ func (ws *WsTask) send(buffer []byte) bool {
 	if ws.isClosed() {
 		return false
 	}
-	ws.msgChan <- sendMsg{msg: buffer}
+	ws.msgChan <- &sendMsg{msg: buffer}
 	return true
 }
 
@@ -184,7 +191,7 @@ func (ws *WsTask) recvLoop() {
 			fmt.Println("msg length error.")
 			continue
 		}
-		ws.recvChan <- &MSG{msg: message[2:]}
+		ws.recvChan <- &recvMsg{msg: message[2:]}
 		message = message[:0]
 		messageType = 0
 	}
@@ -227,15 +234,34 @@ func (ws *WsTask) sendLoop() {
 	}
 }
 
-func newServer() *websocket.Upgrader {
+func defaultServer() *websocket.Upgrader {
 	return &websocket.Upgrader{
-		HandshakeTimeout:  0,
-		ReadBufferSize:    0,
-		WriteBufferSize:   0,
-		WriteBufferPool:   nil,
-		Subprotocols:      nil,
-		Error:             nil,
-		CheckOrigin:       nil,
+		HandshakeTimeout: 30 * time.Second,
+		ReadBufferSize:   1024,
+		WriteBufferSize:  1024,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
 		EnableCompression: false,
+	}
+}
+
+type ServerConfig struct {
+	HandshakeTimeout  int64
+	ReadBufferSize    int
+	WriteBufferSize   int
+	CheckOrigin       bool
+	EnableCompression bool
+}
+
+func newServer(conf *ServerConfig) *websocket.Upgrader {
+	return &websocket.Upgrader{
+		HandshakeTimeout: time.Duration(conf.HandshakeTimeout) * time.Second,
+		ReadBufferSize:   conf.ReadBufferSize,
+		WriteBufferSize:  conf.WriteBufferSize,
+		CheckOrigin: func(r *http.Request) bool {
+			return conf.CheckOrigin
+		},
+		EnableCompression: conf.EnableCompression,
 	}
 }
