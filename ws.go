@@ -129,6 +129,7 @@ func (ws *WsTask) Handle(handle func(data Message) (uint16, proto.Message)) {
 			return
 		case msg, ok := <-ws.recvChan:
 			if !ok || msg == nil {
+				ws.canal()
 				fmt.Println("Handle Exit")
 				return
 			}
